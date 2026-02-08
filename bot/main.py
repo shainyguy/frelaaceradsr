@@ -9,7 +9,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
@@ -23,88 +23,45 @@ import uvicorn
 from bot.config import config
 from bot.database import init_db, async_session
 
-# ============ LOAD HANDLERS DIRECTLY ============
+# ============ LOAD HANDLERS ============
 logger.info("📦 Loading handlers directly...")
-
 loaded_routers = []
 
-try:
-    from bot.handlers.start import router as r1
-    loaded_routers.append(r1)
-    logger.info("  ✅ start")
-except Exception as e:
-    logger.error(f"  ❌ start: {e}")
+handler_modules = [
+    ("start", "bot.handlers.start"),
+    ("profile", "bot.handlers.profile"),
+    ("categories", "bot.handlers.categories"),
+    ("parser_control", "bot.handlers.parser_control"),
+    ("crm", "bot.handlers.crm"),
+    ("calculator", "bot.handlers.calculator"),
+    ("notifications", "bot.handlers.notifications"),
+    ("subscription", "bot.handlers.subscription"),
+    ("client_check", "bot.handlers.client_check"),
+]
 
-try:
-    from bot.handlers.profile import router as r2
-    loaded_routers.append(r2)
-    logger.info("  ✅ profile")
-except Exception as e:
-    logger.error(f"  ❌ profile: {e}")
+for name, module_path in handler_modules:
+    try:
+        import importlib
+        module = importlib.import_module(module_path)
+        router = getattr(module, "router")
+        loaded_routers.append(router)
+        logger.info(f"  ✅ {name}")
+    except Exception as e:
+        logger.error(f"  ❌ {name}: {e}")
 
-try:
-    from bot.handlers.categories import router as r3
-    loaded_routers.append(r3)
-    logger.info("  ✅ categories")
-except Exception as e:
-    logger.error(f"  ❌ categories: {e}")
+logger.info(f"📦 Total: {len(loaded_routers)}/9 handlers")
 
-try:
-    from bot.handlers.parser_control import router as r4
-    loaded_routers.append(r4)
-    logger.info("  ✅ parser_control")
-except Exception as e:
-    logger.error(f"  ❌ parser_control: {e}")
-
-try:
-    from bot.handlers.crm import router as r5
-    loaded_routers.append(r5)
-    logger.info("  ✅ crm")
-except Exception as e:
-    logger.error(f"  ❌ crm: {e}")
-
-try:
-    from bot.handlers.calculator import router as r6
-    loaded_routers.append(r6)
-    logger.info("  ✅ calculator")
-except Exception as e:
-    logger.error(f"  ❌ calculator: {e}")
-
-try:
-    from bot.handlers.notifications import router as r7
-    loaded_routers.append(r7)
-    logger.info("  ✅ notifications")
-except Exception as e:
-    logger.error(f"  ❌ notifications: {e}")
-
-try:
-    from bot.handlers.subscription import router as r8
-    loaded_routers.append(r8)
-    logger.info("  ✅ subscription")
-except Exception as e:
-    logger.error(f"  ❌ subscription: {e}")
-
-try:
-    from bot.handlers.client_check import router as r9
-    loaded_routers.append(r9)
-    logger.info("  ✅ client_check")
-except Exception as e:
-    logger.error(f"  ❌ client_check: {e}")
-
-logger.info(f"📦 Total handlers loaded: {len(loaded_routers)}/9")
-
-# ============ BOT SETUP ============
+# ============ BOT ============
 bot = Bot(
     token=config.BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+dp = Dispatcher(storage=MemoryStorage())
 
 for router in loaded_routers:
     dp.include_router(router)
 
-logger.info(f"✅ {len(loaded_routers)} routers registered in dispatcher")
+logger.info(f"✅ {len(loaded_routers)} routers registered")
 
 
 # ============ FASTAPI ============
@@ -112,12 +69,14 @@ logger.info(f"✅ {len(loaded_routers)} routers registered in dispatcher")
 async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Freelance Radar Bot...")
 
+    # DB
     try:
         await init_db()
         logger.info("✅ Database ready")
     except Exception as e:
         logger.error(f"❌ Database error: {e}")
 
+    # Scheduler
     try:
         from bot.services.scheduler import scheduler_service
         scheduler_service.start(bot)
@@ -125,17 +84,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Scheduler error: {e}")
 
+    # Webhook
     if config.WEBHOOK_URL:
         try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("🗑 Old webhook deleted")
+
             webhook_url = f"{config.WEBHOOK_URL}/webhook"
             await bot.set_webhook(
                 url=webhook_url,
                 drop_pending_updates=True,
                 allowed_updates=["message", "callback_query"]
             )
-            logger.info(f"✅ Webhook: {webhook_url}")
+            logger.info(f"✅ Webhook set: {webhook_url}")
+
+            info = await bot.get_webhook_info()
+            logger.info(f"📡 Webhook confirmed: url={info.url}")
+            if info.last_error_message:
+                logger.warning(f"⚠️ Last webhook error: {info.last_error_message}")
         except Exception as e:
-            logger.error(f"❌ Webhook error: {e}")
+            logger.error(f"❌ Webhook error: {e}, falling back to polling")
             asyncio.create_task(start_polling())
     else:
         asyncio.create_task(start_polling())
@@ -144,6 +112,7 @@ async def lifespan(app: FastAPI):
     logger.info("🟢 BOT IS READY!")
     yield
 
+    # Shutdown
     logger.info("🔴 Shutting down...")
     try:
         from bot.services.scheduler import scheduler_service
@@ -151,8 +120,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
-        if config.WEBHOOK_URL:
-            await bot.delete_webhook()
+        await bot.delete_webhook()
     except Exception:
         pass
     await bot.session.close()
@@ -161,6 +129,7 @@ async def lifespan(app: FastAPI):
 async def start_polling():
     await asyncio.sleep(2)
     try:
+        logger.info("🔄 Starting polling...")
         await dp.start_polling(bot, skip_updates=True)
     except Exception as e:
         logger.error(f"Polling error: {e}")
@@ -176,30 +145,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static files
+# Static
 static_dir = os.path.join(os.path.dirname(__file__), "webapp", "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Webapp routes
+# WebApp
 try:
     from bot.webapp.app import webapp_router
     app.include_router(webapp_router)
     logger.info("✅ WebApp router loaded")
 except Exception as e:
-    logger.error(f"❌ WebApp router error: {e}")
+    logger.error(f"❌ WebApp: {e}")
 
 
+# ============ ENDPOINTS ============
 @app.post("/webhook")
 async def webhook_handler(request: Request):
     try:
         update_data = await request.json()
+        logger.info(f"📨 Update received: {list(update_data.keys())}")
         from aiogram.types import Update
         update = Update.model_validate(update_data, context={"bot": bot})
         await dp.feed_update(bot=bot, update=update)
         return JSONResponse({"ok": True})
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}")
         return JSONResponse({"ok": False, "error": str(e)})
 
 
@@ -210,7 +181,23 @@ async def health():
 
 @app.get("/")
 async def root():
-    return {"message": "Freelance Radar Bot", "handlers": len(loaded_routers)}
+    return {"message": "Freelance Radar Bot", "status": "running"}
+
+
+@app.get("/debug/webhook")
+async def debug_webhook():
+    try:
+        info = await bot.get_webhook_info()
+        return {
+            "url": info.url,
+            "has_custom_certificate": info.has_custom_certificate,
+            "pending_update_count": info.pending_update_count,
+            "last_error_date": str(info.last_error_date) if info.last_error_date else None,
+            "last_error_message": info.last_error_message,
+            "max_connections": info.max_connections,
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/payment/webhook")
@@ -225,24 +212,23 @@ async def payment_webhook(request: Request):
         if event == "payment.succeeded" and status == "succeeded":
             metadata = obj.get("metadata", {})
             user_id = metadata.get("user_id")
-
             if user_id:
                 from bot.models import User, Payment
                 from sqlalchemy import select
                 from datetime import datetime, timedelta
 
                 async with async_session() as session:
-                    pay_result = await session.execute(
+                    pay_r = await session.execute(
                         select(Payment).where(Payment.yookassa_id == payment_id)
                     )
-                    payment = pay_result.scalar_one_or_none()
-                    if payment:
-                        payment.status = "succeeded"
+                    pay = pay_r.scalar_one_or_none()
+                    if pay:
+                        pay.status = "succeeded"
 
-                    user_result = await session.execute(
+                    user_r = await session.execute(
                         select(User).where(User.id == int(user_id))
                     )
-                    user = user_result.scalar_one_or_none()
+                    user = user_r.scalar_one_or_none()
                     if user:
                         user.is_trial = False
                         user.subscription_end = datetime.utcnow() + timedelta(days=config.SUBSCRIPTION_DAYS)
@@ -254,12 +240,11 @@ async def payment_webhook(request: Request):
                             )
                         except Exception:
                             pass
-
                     await session.commit()
 
         return JSONResponse({"ok": True})
     except Exception as e:
-        logger.error(f"Payment webhook error: {e}")
+        logger.error(f"Payment error: {e}")
         return JSONResponse({"ok": False})
 
 
