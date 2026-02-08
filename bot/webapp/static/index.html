@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Freelance Radar</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="bottom-nav" id="bottomNav">
+        <button class="nav-btn active" data-tab="feed" onclick="switchTab('feed')">
+            <span class="nav-icon">🔍</span>
+            <span class="nav-label">Лента</span>
+        </button>
+        <button class="nav-btn" data-tab="crm" onclick="switchTab('crm')">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">CRM</span>
+        </button>
+        <button class="nav-btn" data-tab="tools" onclick="switchTab('tools')">
+            <span class="nav-icon">🛠</span>
+            <span class="nav-label">Инструменты</span>
+        </button>
+        <button class="nav-btn" data-tab="profile" onclick="switchTab('profile')">
+            <span class="nav-icon">👤</span>
+            <span class="nav-label">Профиль</span>
+        </button>
+    </nav>
+
+    <!-- Loading -->
+    <div class="loading-screen" id="loadingScreen">
+        <div class="loader"></div>
+        <p>Загружаем Freelance Radar...</p>
+    </div>
+
+    <!-- Feed Tab -->
+    <div class="tab-content active" id="tab-feed">
+        <div class="header">
+            <h1>🔍 Лента заказов</h1>
+            <button class="btn-refresh" onclick="loadFeed()">🔄</button>
+        </div>
+        <div class="filter-bar">
+            <button class="filter-chip active" onclick="filterFeed('all', this)">Все</button>
+            <button class="filter-chip" onclick="filterFeed('kwork', this)">Kwork</button>
+            <button class="filter-chip" onclick="filterFeed('fl', this)">FL.ru</button>
+            <button class="filter-chip" onclick="filterFeed('habr', this)">Habr</button>
+            <button class="filter-chip" onclick="filterFeed('hh', this)">HH</button>
+        </div>
+        <div id="feedList" class="order-list">
+            <div class="empty-state">
+                <span class="empty-icon">📭</span>
+                <p>Запустите парсер чтобы увидеть заказы</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- CRM Tab -->
+    <div class="tab-content" id="tab-crm">
+        <div class="header">
+            <h1>📊 CRM</h1>
+        </div>
+        <div class="stats-grid" id="crmStats"></div>
+        <div class="filter-bar">
+            <button class="filter-chip active" onclick="filterCRM('all', this)">Все</button>
+            <button class="filter-chip" onclick="filterCRM('new', this)">🆕 Новые</button>
+            <button class="filter-chip" onclick="filterCRM('responded', this)">✉️ Отклик</button>
+            <button class="filter-chip" onclick="filterCRM('in_progress', this)">⚙️ В работе</button>
+            <button class="filter-chip" onclick="filterCRM('completed', this)">✅ Готово</button>
+        </div>
+        <div id="crmList" class="order-list"></div>
+    </div>
+
+    <!-- Tools Tab -->
+    <div class="tab-content" id="tab-tools">
+        <div class="header">
+            <h1>🛠 Инструменты</h1>
+        </div>
+        <div class="tools-grid">
+            <div class="tool-card" onclick="openTool('calculator')">
+                <span class="tool-icon">💰</span>
+                <h3>Калькулятор цены</h3>
+                <p>AI-оценка стоимости задачи</p>
+            </div>
+            <div class="tool-card" onclick="openTool('response')">
+                <span class="tool-icon">✍️</span>
+                <h3>Генератор откликов</h3>
+                <p>AI напишет идеальный отклик</p>
+            </div>
+            <div class="tool-card" onclick="openTool('client')">
+                <span class="tool-icon">👁</span>
+                <h3>Проверка заказчика</h3>
+                <p>Анализ надёжности клиента</p>
+            </div>
+            <div class="tool-card" onclick="openTool('market')">
+                <span class="tool-icon">📊</span>
+                <h3>Цены по рынку</h3>
+                <p>Средние расценки 2024</p>
+            </div>
+        </div>
+
+        <!-- Tool panels -->
+        <div class="tool-panel" id="panel-calculator" style="display:none;">
+            <h2>💰 Калькулятор цены</h2>
+            <textarea id="calcDescription" placeholder="Опишите задачу..." rows="4"></textarea>
+            <button class="btn-primary" onclick="calculatePrice()">🤖 Рассчитать</button>
+            <div id="calcResult" class="result-box"></div>
+        </div>
+
+        <div class="tool-panel" id="panel-response" style="display:none;">
+            <h2>✍️ Генератор откликов</h2>
+            <input type="text" id="respTitle" placeholder="Название заказа" class="input-field">
+            <textarea id="respDescription" placeholder="Описание заказа..." rows="4"></textarea>
+            <button class="btn-primary" onclick="generateResponse()">✍️ Сгенерировать</button>
+            <div id="respResult" class="result-box"></div>
+        </div>
+
+        <div class="tool-panel" id="panel-client" style="display:none;">
+            <h2>👁 Проверка заказчика</h2>
+            <textarea id="clientInfo" placeholder="Информация о заказчике (имя, ссылка, описание заказа)..." rows="4"></textarea>
+            <button class="btn-primary" onclick="checkClient()">🔍 Проверить</button>
+            <div id="clientResult" class="result-box"></div>
+        </div>
+
+        <div class="tool-panel" id="panel-market" style="display:none;">
+            <h2>📊 Средние цены 2024</h2>
+            <div class="market-prices">
+                <div class="price-category">
+                    <h3>🐍 Python</h3>
+                    <div class="price-row"><span>Telegram-бот</span><span>10K — 80K ₽</span></div>
+                    <div class="price-row"><span>Парсер</span><span>5K — 40K ₽</span></div>
+                    <div class="price-row"><span>API/Backend</span><span>30K — 200K ₽</span></div>
+                    <div class="price-row"><span>Автоматизация</span><span>10K — 60K ₽</span></div>
+                </div>
+                <div class="price-category">
+                    <h3>🌐 Веб</h3>
+                    <div class="price-row"><span>Лендинг</span><span>15K — 60K ₽</span></div>
+                    <div class="price-row"><span>Корп. сайт</span><span>50K — 300K ₽</span></div>
+                    <div class="price-row"><span>Интернет-магазин</span><span>80K — 500K ₽</span></div>
+                </div>
+                <div class="price-category">
+                    <h3>🎨 Дизайн</h3>
+                    <div class="price-row"><span>Логотип</span><span>5K — 50K ₽</span></div>
+                    <div class="price-row"><span>UI/UX макет</span><span>30K — 150K ₽</span></div>
+                    <div class="price-row"><span>Фирменный стиль</span><span>20K — 100K ₽</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Tab -->
+    <div class="tab-content" id="tab-profile">
+        <div class="header">
+            <h1>👤 Профиль</h1>
+        </div>
+        <div class="profile-card" id="profileCard">
+            <div class="profile-avatar" id="profileAvatar">👤</div>
+            <h2 id="profileName">Загрузка...</h2>
+            <span class="subscription-badge" id="subBadge"></span>
+        </div>
+
+        <div class="profile-stats" id="profileStats"></div>
+
+        <div class="profile-form">
+            <div class="form-group">
+                <label>📛 Имя</label>
+                <input type="text" id="profName" class="input-field" placeholder="Ваше имя">
+            </div>
+            <div class="form-group">
+                <label>📝 О себе</label>
+                <textarea id="profBio" class="input-field" rows="3" placeholder="Расскажите о себе..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>🔗 Портфолио</label>
+                <input type="text" id="profPortfolio" class="input-field" placeholder="https://...">
+            </div>
+            <div class="form-group">
+                <label>💵 Ставка (₽/час)</label>
+                <input type="number" id="profRate" class="input-field" placeholder="2000">
+            </div>
+            <div class="form-group">
+                <label>📅 Опыт (лет)</label>
+                <input type="number" id="profExperience" class="input-field" placeholder="3">
+            </div>
+            <button class="btn-primary" onclick="saveProfile()">💾 Сохранить</button>
+        </div>
+
+        <!-- Парсер -->
+        <div class="parser-control">
+            <h3>🔍 Парсер заказов</h3>
+            <div class="parser-toggle">
+                <span id="parserStatus">🔴 Выключен</span>
+                <button class="btn-toggle" id="parserBtn" onclick="toggleParser()">Включить</button>
+            </div>
+        </div>
+
+        <!-- Категории -->
+        <div class="categories-section">
+            <h3>📂 Категории</h3>
+            <div class="categories-grid" id="categoriesGrid"></div>
+        </div>
+    </div>
+
+    <!-- Order Detail Modal -->
+    <div class="modal" id="orderModal" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle"></h2>
+                <button class="modal-close" onclick="closeModal()">✕</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-actions" id="modalActions"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
