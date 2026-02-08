@@ -37,22 +37,15 @@ async_session = async_sessionmaker(
 
 
 async def init_db():
-    """Полная пересоздание БД с CASCADE"""
+    """Безопасное создание таблиц (без удаления данных)"""
     async with engine.begin() as conn:
-        if "postgresql" in DATABASE_URL:
-            # Удаляем ВСЕ таблицы принудительно через CASCADE
-            await conn.execute(text("DROP SCHEMA public CASCADE"))
-            await conn.execute(text("CREATE SCHEMA public"))
-            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-            print("✅ Schema dropped and recreated")
-
-        # Создаём все таблицы заново
         await conn.run_sync(Base.metadata.create_all)
 
     db_display = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL
-    print(f"✅ Database initialized (fresh): {db_display}")
+    print(f"✅ Database initialized: {db_display}")
 
 
 async def get_session() -> AsyncSession:
     async with async_session() as session:
         return session
+
