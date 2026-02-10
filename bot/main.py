@@ -200,6 +200,28 @@ async def debug_webhook():
         return {"error": str(e)}
 
 
+@app.get("/debug/gigachat")
+async def debug_gigachat():
+    """Тест GigaChat"""
+    try:
+        from bot.services.gigachat import gigachat_service
+        token = await gigachat_service._get_token()
+        return {
+            "status": "ok",
+            "token_obtained": bool(token),
+            "token_length": len(token) if token else 0,
+            "secret_set": bool(config.GIGACHAT_SECRET),
+            "secret_length": len(config.GIGACHAT_SECRET) if config.GIGACHAT_SECRET else 0,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "secret_set": bool(config.GIGACHAT_SECRET),
+            "secret_length": len(config.GIGACHAT_SECRET) if config.GIGACHAT_SECRET else 0,
+        }
+
+
 @app.post("/payment/webhook")
 async def payment_webhook(request: Request):
     try:
@@ -254,3 +276,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
