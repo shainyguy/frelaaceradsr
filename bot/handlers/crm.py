@@ -3,6 +3,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
+from bot.handlers.middleware import check_subscription, SUB_REQUIRED_KB, SUB_REQUIRED_TEXT
 
 from bot.database import async_session
 from bot.models import User, Order, ParsedOrder
@@ -27,15 +28,13 @@ STATUS_LABELS = {
 
 @router.callback_query(F.data == "crm_menu")
 async def crm_menu(callback: CallbackQuery):
-    async with async_session() as session:
-        result = await session.execute(
-            select(User).where(User.telegram_id == callback.from_user.id)
+    user, has_sub = await check_subscription(callback.from_user.id)
+    if not has_sub:
+        await callback.message.edit_text(
+            SUB_REQUIRED_TEXT, reply_markup=SUB_REQUIRED_KB, parse_mode="HTML"
         )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            await callback.answer("Нажмите /start")
-            return
+        await callback.answer()
+        return
 
         orders_result = await session.execute(
             select(Order).where(Order.user_id == user.id).order_by(Order.created_at.desc()).limit(50)
@@ -312,5 +311,6 @@ async def crm_delete(callback: CallbackQuery):
         if order:
             await session.delete(order)
             await session.commit()
+
 
     await callback.answer("🗑 Заказ удалён из CRM", show_alert=True)
