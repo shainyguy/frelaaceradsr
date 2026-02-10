@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from bot.services.gigachat import gigachat_service
+from bot.handlers.middleware import check_subscription, SUB_REQUIRED_KB, SUB_REQUIRED_TEXT
 
 router = Router()
 
@@ -15,6 +16,16 @@ class CalculatorStates(StatesGroup):
 
 @router.callback_query(F.data == "calculator")
 async def calculator_menu(callback: CallbackQuery):
+    user, has_sub = await check_subscription(callback.from_user.id)
+    if not has_sub:
+        await callback.message.edit_text(
+            SUB_REQUIRED_TEXT,
+            reply_markup=SUB_REQUIRED_KB,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤖 AI-оценка задачи", callback_data="calc_ai")],
         [InlineKeyboardButton(text="⏱ Калькулятор по часам", callback_data="calc_hours")],
@@ -22,8 +33,7 @@ async def calculator_menu(callback: CallbackQuery):
     ])
 
     await callback.message.edit_text(
-        "💰 <b>Калькулятор цены</b>\n\n"
-        "Выберите способ расчёта:",
+        "💰 <b>Калькулятор цены</b>\n\nВыберите способ расчёта:",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -32,15 +42,17 @@ async def calculator_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "calc_ai")
 async def calc_ai_start(callback: CallbackQuery, state: FSMContext):
+    user, has_sub = await check_subscription(callback.from_user.id)
+    if not has_sub:
+        await callback.answer("🔒 Нужна подписка!", show_alert=True)
+        return
+
     await callback.message.edit_text(
         "🤖 <b>AI-оценка стоимости</b>\n\n"
-        "Опишите задачу подробно. Чем больше деталей — тем точнее оценка.\n\n"
-        "<b>Хороший пример:</b>\n"
-        "«Telegram-бот для интернет-магазина: каталог товаров из БД, "
-        "корзина, оформление заказа, оплата через ЮKassa, "
-        "админ-панель для добавления товаров, уведомления менеджеру»\n\n"
-        "<b>Плохой пример:</b>\n"
-        "«Нужен бот»",
+        "Опишите задачу подробно:\n\n"
+        "<b>Пример:</b>\n"
+        "«Telegram-бот для магазина: каталог из БД, корзина, "
+        "оплата через ЮKassa, админ-панель, уведомления»",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="calculator")]
         ]),
@@ -54,29 +66,24 @@ async def calc_ai_start(callback: CallbackQuery, state: FSMContext):
 async def calc_ai_process(message: Message, state: FSMContext):
     await state.clear()
 
-    if len(message.text.strip()) < 10:
-        await message.answer(
-            "⚠️ Слишком короткое описание. Опишите задачу подробнее.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="calc_ai")],
-                [InlineKeyboardButton(text="◀️ Назад", callback_data="calculator")]
-            ])
-        )
+    user, has_sub = await check_subscription(message.from_user.id)
+    if not has_sub:
+        await message.answer(SUB_REQUIRED_TEXT, reply_markup=SUB_REQUIRED_KB, parse_mode="HTML")
         return
 
-    processing_msg = await message.answer("⏳ Анализирую задачу через AI... (5-10 секунд)")
+    if len(message.text.strip()) < 10:
+        await message.answer("⚠️ Опишите задачу подробнее (минимум 10 символов)")
+        return
+
+    processing_msg = await message.answer("⏳ AI анализирует задачу... (5-10 сек)")
 
     try:
-        result = await gigachat_service.calculate_price(
-            message.text,
-            "general"
-        )
-
+        result = await gigachat_service.calculate_price(message.text, "general")
         await processing_msg.delete()
         await message.answer(
             f"💰 <b>AI-оценка стоимости</b>\n\n{result}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Оценить другую задачу", callback_data="calc_ai")],
+                [InlineKeyboardButton(text="🔄 Оценить другую", callback_data="calc_ai")],
                 [InlineKeyboardButton(text="◀️ Назад", callback_data="calculator")]
             ]),
             parse_mode="HTML"
@@ -84,8 +91,7 @@ async def calc_ai_process(message: Message, state: FSMContext):
     except Exception as e:
         await processing_msg.delete()
         await message.answer(
-            f"❌ <b>Ошибка AI:</b> {str(e)[:300]}\n\n"
-            f"Проверьте что GIGACHAT_SECRET задан правильно.",
+            f"❌ <b>Ошибка:</b> {str(e)[:300]}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="calc_ai")],
                 [InlineKeyboardButton(text="◀️ Назад", callback_data="calculator")]
@@ -96,9 +102,13 @@ async def calc_ai_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "calc_hours")
 async def calc_hours_start(callback: CallbackQuery, state: FSMContext):
+    user, has_sub = await check_subscription(callback.from_user.id)
+    if not has_sub:
+        await callback.answer("🔒 Нужна подписка!", show_alert=True)
+        return
+
     await callback.message.edit_text(
-        "⏱ <b>Калькулятор по часам</b>\n\n"
-        "Введите количество часов на задачу:",
+        "⏱ <b>Калькулятор по часам</b>\n\nВведите количество часов:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="calculator")]
         ]),
@@ -112,6 +122,11 @@ async def calc_hours_start(callback: CallbackQuery, state: FSMContext):
 async def calc_hours_process(message: Message, state: FSMContext):
     await state.clear()
 
+    user, has_sub = await check_subscription(message.from_user.id)
+    if not has_sub:
+        await message.answer(SUB_REQUIRED_TEXT, reply_markup=SUB_REQUIRED_KB, parse_mode="HTML")
+        return
+
     try:
         hours = float(message.text.replace(",", ".").strip())
     except ValueError:
@@ -119,38 +134,24 @@ async def calc_hours_process(message: Message, state: FSMContext):
         return
 
     rates = {
-        "👶 Junior (0-1 год)": 800,
-        "👨‍💻 Middle (2-4 года)": 1800,
-        "👨‍🔬 Senior (5+ лет)": 3000,
-        "🏆 Lead/Expert": 5000,
+        "👶 Junior": 800,
+        "👨‍💻 Middle": 1800,
+        "👨‍🔬 Senior": 3000,
+        "🏆 Expert": 5000,
     }
 
-    text = f"⏱ <b>Расчёт: {hours} часов работы</b>\n\n"
-
+    text = f"⏱ <b>Расчёт: {hours} часов</b>\n\n"
     for level, rate in rates.items():
         total = hours * rate
-        with_risks = total * 1.25  # +25% на риски
-        text += (
-            f"{level}\n"
-            f"  Ставка: {rate:,} ₽/час\n"
-            f"  Базовая: <b>{total:,.0f} ₽</b>\n"
-            f"  С рисками (+25%): <b>{with_risks:,.0f} ₽</b>\n\n"
-        )
+        risk = total * 1.25
+        text += f"{level} ({rate} ₽/ч): <b>{total:,.0f} ₽</b> (с рисками: {risk:,.0f} ₽)\n"
 
-    text += (
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"💡 <b>Советы:</b>\n"
-        f"• Всегда закладывайте +25-30% на правки\n"
-        f"• Первый заказ у клиента — цена выше\n"
-        f"• Срочность: +30-50% к цене\n"
-        f"• Сложный ТЗ без чёткости: +20%"
-    )
+    text += "\n💡 Закладывайте +25-30% на правки и риски"
 
     await message.answer(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🤖 AI-оценка задачи", callback_data="calc_ai")],
-            [InlineKeyboardButton(text="🔄 Другой расчёт", callback_data="calc_hours")],
+            [InlineKeyboardButton(text="🤖 AI-оценка", callback_data="calc_ai")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="calculator")]
         ]),
         parse_mode="HTML"
