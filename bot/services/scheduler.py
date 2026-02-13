@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -11,41 +12,96 @@ from bot.config import config
 if TYPE_CHECKING:
     from aiogram import Bot
 
+logger = logging.getLogger(__name__)
+
 
 class SchedulerService:
-    """Планировщик парсинга"""
-
     def __init__(self):
         self.bot = None
         self.running = False
-        self._task = None
+        self._parse_task = None
+        self._health_task = None
 
     def start(self, bot):
         self.bot = bot
         self.running = True
-        self._task = asyncio.create_task(self._loop())
+        self._parse_task = asyncio.create_task(self._parse_loop())
+        self._health_task = asyncio.create_task(self._health_loop())
         print("[Scheduler] Started")
 
     def stop(self):
         self.running = False
-        if self._task:
-            self._task.cancel()
+        if self._parse_task:
+            self._parse_task.cancel()
+        if self._health_task:
+            self._health_task.cancel()
         print("[Scheduler] Stopped")
 
-    async def _loop(self):
+    async def _health_loop(self):
+        """Проверка webhook каждые 5 минут"""
+        while self.running:
+            try:
+                await asyncio.sleep(300)  # 5 минут
+                await self._check_webhook()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[Health] Error: {e}")
+
+    async def _check_webhook(self):
+        """Проверка и восстановление webhook"""
+        if not self.bot or not config.WEBHOOK_URL:
+            return
+
+        try:
+            info = await self.bot.get_webhook_info()
+            expected_url = f"{config.WEBHOOK_URL}/webhook"
+
+            if info.url != expected_url:
+                logger.warning(f"[Health] Webhook URL mismatch! Expected: {expected_url}, Got: {info.url}")
+                await self.bot.delete_webhook(drop_pending_updates=True)
+                await self.bot.set_webhook(
+                    url=expected_url,
+                    drop_pending_updates=True,
+                    allowed_updates=["message", "callback_query"]
+                )
+                logger.info(f"[Health] Webhook restored: {expected_url}")
+
+            elif info.last_error_message:
+                logger.warning(f"[Health] Webhook error: {info.last_error_message}")
+                # Переустанавливаем при ошибках
+                if info.last_error_date:
+                    error_age = (datetime.utcnow() - info.last_error_date).seconds
+                    if error_age < 600:  # Ошибка менее 10 минут назад
+                        await self.bot.delete_webhook(drop_pending_updates=True)
+                        await asyncio.sleep(2)
+                        await self.bot.set_webhook(
+                            url=expected_url,
+                            drop_pending_updates=True,
+                            allowed_updates=["message", "callback_query"]
+                        )
+                        logger.info("[Health] Webhook re-established after error")
+
+            else:
+                logger.info(f"[Health] Webhook OK: {info.url}, pending: {info.pending_update_count}")
+
+        except Exception as e:
+            logger.error(f"[Health] Check failed: {e}")
+
+    async def _parse_loop(self):
         """Основной цикл парсинга"""
         while self.running:
             try:
+                await asyncio.sleep(config.PARSE_INTERVAL)
                 await self._parse_and_notify()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                print(f"[Scheduler] Error: {e}")
-
-            await asyncio.sleep(config.PARSE_INTERVAL)
+                logger.error(f"[Scheduler] Parse error: {e}")
 
     async def _parse_and_notify(self):
-        """Парсинг и рассылка новых заказов"""
+        """Парсинг и рассылка"""
         async with async_session() as session:
-            # Получаем всех активных пользователей с включённым парсером
             result = await session.execute(
                 select(User).where(
                     User.parser_active == True,
@@ -57,9 +113,14 @@ class SchedulerService:
         if not users:
             return
 
-        # Собираем все уникальные ключевые слова
+        # Фильтруем только с активной подпиской
+        active_users = [u for u in users if u.has_active_subscription]
+        if not active_users:
+            return
+
+        # Собираем ключевые слова
         all_keywords = set()
-        for user in users:
+        for user in active_users:
             if user.categories:
                 for cat in user.categories:
                     cat_info = config.CATEGORIES.get(cat)
@@ -69,23 +130,21 @@ class SchedulerService:
         if not all_keywords:
             return
 
-        # Парсим все биржи
+        # Парсим
         orders = await parser_manager.parse_all(list(all_keywords))
-
         if not orders:
             return
 
-        # Сохраняем в БД и рассылаем
+        # Рассылаем
         async with async_session() as session:
             for order in orders:
-                # Проверяем дубликат в БД
+                # Дедупликация
                 existing = await session.execute(
                     select(ParsedOrder).where(ParsedOrder.hash == order.hash)
                 )
                 if existing.scalar_one_or_none():
                     continue
 
-                # Сохраняем
                 parsed = ParsedOrder(
                     external_id=order.external_id,
                     source=order.source,
@@ -101,14 +160,11 @@ class SchedulerService:
                 )
                 session.add(parsed)
 
-                # Рассылаем подходящим пользователям
-                for user in users:
-                    if not user.has_active_subscription:
-                        continue
+                for user in active_users:
                     if parser_manager.is_sent(user.telegram_id, order.hash):
                         continue
 
-                    # Проверяем совпадение категорий
+                    # Проверяем категории
                     if user.categories:
                         user_keywords = []
                         for cat in user.categories:
@@ -118,14 +174,14 @@ class SchedulerService:
                         if not order.matches_keywords(user_keywords):
                             continue
 
-                    # Проверяем минимальный бюджет
+                    # Мин. бюджет
                     if user.min_budget > 0 and order.budget_value > 0:
                         if order.budget_value < user.min_budget:
                             continue
 
-                    # Проверяем тихие часы
+                    # Тихие часы
                     now = datetime.utcnow()
-                    hour = (now.hour + 3) % 24  # МСК
+                    hour = (now.hour + 3) % 24
                     if user.quiet_hours_start > user.quiet_hours_end:
                         if hour >= user.quiet_hours_start or hour < user.quiet_hours_end:
                             continue
@@ -133,33 +189,27 @@ class SchedulerService:
                         if user.quiet_hours_start <= hour < user.quiet_hours_end:
                             continue
 
-                    # Отправляем
                     try:
                         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text="✍️ Сгенерировать отклик",
+                                callback_data=f"generate_response:{order.hash[:32]}"
+                            )],
                             [
                                 InlineKeyboardButton(
-                                    text="✍️ Сгенерировать отклик",
-                                    callback_data=f"generate_response:{order.hash[:32]}"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text="📥 Сохранить в CRM",
+                                    text="📥 В CRM",
                                     callback_data=f"save_crm:{order.hash[:32]}"
                                 ),
                                 InlineKeyboardButton(
-                                    text="🔍 Проверить заказчика",
+                                    text="🔍 Проверить",
                                     callback_data=f"check_client:{order.hash[:32]}"
                                 ),
                             ],
-                            [
-                                InlineKeyboardButton(
-                                    text="🔗 Открыть",
-                                    url=order.url
-                                )
-                            ] if order.url else []
+                            [InlineKeyboardButton(
+                                text="🔗 Открыть", url=order.url
+                            )] if order.url else []
                         ])
 
                         await self.bot.send_message(
@@ -170,12 +220,10 @@ class SchedulerService:
                             disable_web_page_preview=True
                         )
                         parser_manager.mark_sent(user.telegram_id, order.hash)
-
-                        # Обновляем статистику
                         user.orders_viewed += 1
 
                     except Exception as e:
-                        print(f"[Notify] Error sending to {user.telegram_id}: {e}")
+                        logger.error(f"[Notify] Error {user.telegram_id}: {e}")
 
             await session.commit()
 
