@@ -200,6 +200,28 @@ async def debug_webhook():
         return {"error": str(e)}
 
 
+@app.get("/debug/reset-webhook")
+async def reset_webhook():
+    """Ручной сброс webhook"""
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        webhook_url = f"{config.WEBHOOK_URL}/webhook"
+        await bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"]
+        )
+        info = await bot.get_webhook_info()
+        return {
+            "status": "ok",
+            "url": info.url,
+            "pending": info.pending_update_count,
+            "last_error": info.last_error_message,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @app.get("/debug/gigachat")
 async def debug_gigachat():
     """Тест GigaChat"""
@@ -276,4 +298,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
